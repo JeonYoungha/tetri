@@ -1300,11 +1300,64 @@
         });
       }
 
+      // --- 연속 키 입력 시스템 (DAS & ARR) ---
+      // DAS (Delayed Auto Shift): 꾹 누르기 시작한 후 연속 이동까지의 대기시간 (ms)
+      // ARR (Auto Repeat Rate): 연속 이동 주기 (ms, 낮을수록 초고속)
+      const DAS = 130;
+      const ARR = 35;
+      const SOFT_DROP_SPEED = 35;
+
+      const keys = {
+        ArrowLeft: { pressed: false, dasTimer: 0, arrTimer: 0 },
+        ArrowRight: { pressed: false, dasTimer: 0, arrTimer: 0 },
+        ArrowDown: { pressed: false, timer: 0 }
+      };
+
+      function handleContinuousInput(deltaTime) {
+        if (!isPlaying || isPaused || isGameOver) return;
+
+        // 좌측 연속 이동
+        if (keys.ArrowLeft.pressed && !keys.ArrowRight.pressed) {
+          if (keys.ArrowLeft.dasTimer > 0) {
+            keys.ArrowLeft.dasTimer -= deltaTime;
+          } else {
+            keys.ArrowLeft.arrTimer += deltaTime;
+            while (keys.ArrowLeft.arrTimer >= ARR) {
+              movePiece(-1);
+              keys.ArrowLeft.arrTimer -= ARR;
+            }
+          }
+        }
+        // 우측 연속 이동
+        else if (keys.ArrowRight.pressed && !keys.ArrowLeft.pressed) {
+          if (keys.ArrowRight.dasTimer > 0) {
+            keys.ArrowRight.dasTimer -= deltaTime;
+          } else {
+            keys.ArrowRight.arrTimer += deltaTime;
+            while (keys.ArrowRight.arrTimer >= ARR) {
+              movePiece(1);
+              keys.ArrowRight.arrTimer -= ARR;
+            }
+          }
+        }
+
+        // 소프트 드롭 연속 이동
+        if (keys.ArrowDown.pressed) {
+          keys.ArrowDown.timer += deltaTime;
+          while (keys.ArrowDown.timer >= SOFT_DROP_SPEED) {
+            softDrop();
+            keys.ArrowDown.timer -= SOFT_DROP_SPEED;
+          }
+        }
+      }
+
       function update(time = 0) {
-        const deltaTime = time - lastTime;
+        const deltaTime = Math.min(time - lastTime, 100); // 탭 전환 등으로 인한 큰 델타 방지
         lastTime = time;
 
         if (isPlaying && !isPaused && !isGameOver) {
+          handleContinuousInput(deltaTime);
+
           dropCounter += deltaTime;
           if (dropCounter > getDropInterval()) {
             softDrop();
@@ -1342,14 +1395,25 @@
 
         if (isPaused || isGameOver) return;
 
+        // OS 자체의 느린 키 반복(Auto-repeat) 방지
+        if (e.repeat) return;
+
         switch (e.code) {
           case 'ArrowLeft':
+            keys.ArrowLeft.pressed = true;
+            keys.ArrowLeft.dasTimer = DAS;
+            keys.ArrowLeft.arrTimer = 0;
             movePiece(-1);
             break;
           case 'ArrowRight':
+            keys.ArrowRight.pressed = true;
+            keys.ArrowRight.dasTimer = DAS;
+            keys.ArrowRight.arrTimer = 0;
             movePiece(1);
             break;
           case 'ArrowDown':
+            keys.ArrowDown.pressed = true;
+            keys.ArrowDown.timer = 0;
             softDrop();
             break;
           case 'ArrowUp':
@@ -1368,6 +1432,19 @@
             hold();
             break;
         }
+      });
+
+      window.addEventListener('keyup', (e) => {
+        if (e.code === 'ArrowLeft') keys.ArrowLeft.pressed = false;
+        if (e.code === 'ArrowRight') keys.ArrowRight.pressed = false;
+        if (e.code === 'ArrowDown') keys.ArrowDown.pressed = false;
+      });
+
+      // 창 포커스 잃었을 때 키 입력 상태 초기화
+      window.addEventListener('blur', () => {
+        keys.ArrowLeft.pressed = false;
+        keys.ArrowRight.pressed = false;
+        keys.ArrowDown.pressed = false;
       });
 
       // UI 버튼
@@ -1396,8 +1473,33 @@
         soundBtn.textContent = muted ? '🔇' : '🔊';
       });
 
-      // 모바일 가상 패드
-      const bindTouch = (btn, action) => {
+      // 모바일 가상 패드 연속 터치 지원
+      const bindContinuousTouch = (btn, keyName, singleAction) => {
+        if (!btn) return;
+        const start = (e) => {
+          e.preventDefault();
+          soundManager.init();
+          if (!isPlaying || isPaused || isGameOver) return;
+          singleAction();
+          keys[keyName].pressed = true;
+          keys[keyName].dasTimer = DAS;
+          keys[keyName].arrTimer = 0;
+          if (keys[keyName].timer !== undefined) keys[keyName].timer = 0;
+        };
+        const end = (e) => {
+          e.preventDefault();
+          keys[keyName].pressed = false;
+        };
+
+        btn.addEventListener('touchstart', start, { passive: false });
+        btn.addEventListener('touchend', end, { passive: false });
+        btn.addEventListener('touchcancel', end, { passive: false });
+        btn.addEventListener('mousedown', start);
+        btn.addEventListener('mouseup', end);
+        btn.addEventListener('mouseleave', end);
+      };
+
+      const bindSingleTouch = (btn, action) => {
         if (!btn) return;
         const trigger = (e) => {
           e.preventDefault();
@@ -1408,12 +1510,12 @@
         btn.addEventListener('click', trigger);
       };
 
-      bindTouch(btnLeft, () => movePiece(-1));
-      bindTouch(btnRight, () => movePiece(1));
-      bindTouch(btnDown, () => softDrop());
-      bindTouch(btnRotate, () => rotatePiece(1));
-      bindTouch(btnHardDrop, () => hardDrop());
-      bindTouch(btnHold, () => hold());
+      bindContinuousTouch(btnLeft, 'ArrowLeft', () => movePiece(-1));
+      bindContinuousTouch(btnRight, 'ArrowRight', () => movePiece(1));
+      bindContinuousTouch(btnDown, 'ArrowDown', () => softDrop());
+      bindSingleTouch(btnRotate, () => rotatePiece(1));
+      bindSingleTouch(btnHardDrop, () => hardDrop());
+      bindSingleTouch(btnHold, () => hold());
 
       // 초기화
       highScoreEl.textContent = highScore;
